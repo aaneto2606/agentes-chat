@@ -80,6 +80,7 @@ import {
   GROK_BIN,
   isExecutable,
   OPENCODE_BIN,
+  parseAgyModels,
   parseGrokModels,
   resolveCommand,
 } from "./executors";
@@ -555,8 +556,15 @@ export function watchCodexAuth(home: string, granted: string, send: (auth: strin
   };
 }
 
-/** Beside the account folders: the models Grok Build lists to a signed-in account (`AccountManager.grokModels`). */
-const GROK_MODELS_FILE = "grok-models.json";
+/**
+ * Beside the account folders: the models a CLI lists to a signed-in account (`AccountManager.grokModels`,
+ * `AccountManager.agyModels`). The computer's own CLI is signed out, so its list is empty or a sign-in notice.
+ */
+type ListedModelsKind = "grok" | "antigravity";
+const LISTED_MODELS_FILE: Record<ListedModelsKind, string> = {
+  grok: "grok-models.json",
+  antigravity: "agy-models.json",
+};
 
 /**
  * Grok Build keeps its sign-in in `GROK_HOME/auth.json`, an entry per issuer: the grok.com one under
@@ -2546,35 +2554,42 @@ export class AccountManager {
             : kind === "antigravity"
               ? parseAgyStatus(r.status, `${r.stdout}\n${r.stderr}`, agyAuthOf(dir))
               : parseCodexStatus(r.status, `${r.stdout}\n${r.stderr}`);
-    if (kind === "grok" && status.loggedIn) this.keepGrokModels(parseGrokModels(r.stdout));
+    if (status.loggedIn && (kind === "grok" || kind === "antigravity"))
+      this.keepModels(kind, (kind === "grok" ? parseGrokModels : parseAgyModels)(r.stdout));
     // Timed out, or didn't start.
     const unknown = r.status === null ? { statusUnknown: true as const } : {};
     return { id, kind, ...status, ...unknown, ...shared };
   }
 
-  private grokList: CursorModelInfo[] | undefined;
-  private get grokModelsFile() {
-    return path.join(this.opts.root, GROK_MODELS_FILE);
-  }
+  private readonly listed: Partial<Record<ListedModelsKind, CursorModelInfo[] | null>> = {};
 
   /**
    * The models Grok Build last listed for an account signed in here (its status look runs `grok models` in that
    * account's folder), kept across restarts: a folder lent to an agent is never looked at again. Undefined before one.
    */
   grokModels(): CursorModelInfo[] | undefined {
-    if (this.grokList === undefined) {
-      const kept = readSmallJson(this.grokModelsFile, 64 * 1024);
-      const list = Array.isArray(kept) ? kept.filter((m): m is CursorModelInfo => typeof m?.id === "string") : [];
-      this.grokList = list.length > 0 ? list : undefined;
-    }
-    return this.grokList;
+    return this.keptModels("grok");
   }
 
-  private keepGrokModels(list: CursorModelInfo[]) {
-    if (list.length === 0 || JSON.stringify(list) === JSON.stringify(this.grokModels())) return;
-    this.grokList = list;
+  /** Same for the Antigravity CLI: `agy models` in a signed-in account's folder. The computer's own is signed out. */
+  agyModels(): CursorModelInfo[] | undefined {
+    return this.keptModels("antigravity");
+  }
+
+  private keptModels(kind: ListedModelsKind): CursorModelInfo[] | undefined {
+    if (this.listed[kind] === undefined) {
+      const kept = readSmallJson(path.join(this.opts.root, LISTED_MODELS_FILE[kind]), 64 * 1024);
+      const list = Array.isArray(kept) ? kept.filter((m): m is CursorModelInfo => typeof m?.id === "string") : [];
+      this.listed[kind] = list.length > 0 ? list : null;
+    }
+    return this.listed[kind] ?? undefined;
+  }
+
+  private keepModels(kind: ListedModelsKind, list: CursorModelInfo[]) {
+    if (list.length === 0 || JSON.stringify(list) === JSON.stringify(this.keptModels(kind))) return;
+    this.listed[kind] = list;
     try {
-      writeJson(this.grokModelsFile, list);
+      writeJson(path.join(this.opts.root, LISTED_MODELS_FILE[kind]), list);
     } catch {
       // kept in memory until the next look
     }

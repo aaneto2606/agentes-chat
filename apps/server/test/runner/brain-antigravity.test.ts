@@ -516,6 +516,16 @@ test.skipIf(!posix)(
       state: "done",
       account: { kind: "antigravity", loggedIn: true, provider: "enterprise" },
     });
+    // The models it lists signed in, which the computer's own `agy models` (signed out) doesn't: kept for a restart.
+    const listed = [
+      { id: "gemini-4-argon-high", label: "Gemini 4 Argon (High)" },
+      { id: "gemini-3.8-flash-medium", label: "Gemini 3.8 Flash (Medium)" },
+    ];
+    await waitFor(() => m.agyModels() !== undefined, 5000);
+    expect(m.agyModels()).toEqual(listed);
+    const again = new AccountManager({ root: path.join(home, "accounts") });
+    managers.push(again);
+    expect(again.agyModels()).toEqual(listed);
     // Windows keeps every sign-in in the user's one Credential Manager: refused.
     const win = new AccountManager({ root: path.join(home, "win"), orgId: () => ORG, platform: "win32" });
     managers.push(win);
